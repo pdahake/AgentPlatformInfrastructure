@@ -177,14 +177,68 @@ The "Agent Platform Overview" dashboard (Grafana → Dashboards, or http://local
 
 Every container's stdout is captured — `alloy` discovers all of them via the Docker API (no per-service config needed; add a new service to `docker-compose.yaml` and its logs start flowing automatically) and ships them to `loki`.
 
-**In Grafana** (preferred): left sidebar → **Explore** → switch the datasource dropdown to **Loki**. Useful starting queries:
+**In Grafana** (preferred): left sidebar → **Explore** → switch the datasource dropdown to **Loki**.
+
+`service` matches the `docker-compose.yaml` service name (`agent`, `postgres`, `litellm`, ...); there's also a `container` label with the full container name (`agent-platform-agent-1`) if you need to disambiguate after a rebuild. `| json` only works on `{service="agent"}` — it's the only service emitting structured JSON logs (`agent/observability.py`'s `JsonFormatter`); every other service logs plain text, so piping those through `| json` returns nothing.
+
+**Basic filters:**
 ```logql
-{service="agent"}                                    # everything from the agent service
-{service="agent"} | json | level="ERROR"              # just errors, parsed as JSON
-{service="agent"} | json | trace_id="<trace_id>"       # every log line from one specific task run
-{service="postgres"}                                   # any other service — same pattern
+{service="agent"}                          # everything from the agent
+{service="postgres"}                        # any other service — same pattern
+{service=~"agent|litellm"}                  # multiple services (regex alternation)
+{container="agent-platform-agent-1"}        # by full container name instead of service
 ```
-`service` matches the `docker-compose.yaml` service name (`agent`, `postgres`, `litellm`, ...); there's also a `container` label with the full container name (`agent-platform-agent-1`) if you need to disambiguate after a rebuild.
+
+**Filtering on JSON fields** (agent only):
+```logql
+{service="agent"} | json | level="ERROR"
+{service="agent"} | json | level="WARNING"
+{service="agent"} | json | logger="agent_loop"
+{service="agent"} | json | trace_id="<paste-a-trace-id>"     # everything from one specific task run
+```
+
+**Text search** (works on any service, JSON or not):
+```logql
+{service="agent"} |= "task completed"
+{service="agent"} |= "tool_error"
+{service="litellm"} |= "error"
+{service="agent"} != "GET /health"          # exclude noisy health-check lines
+```
+
+**The specific patterns this codebase actually logs** (from `agent_loop.py`) — these are what the alert rules' `logs_link` annotations use under the hood, see [Alerts](#alerts):
+```logql
+{service="agent"} | json | msg=~"task started.*"
+{service="agent"} | json | msg=~"task completed.*"
+{service="agent"} | json | msg=~"task exceeded token threshold.*"
+{service="agent"} | json | msg=~"task exceeded cost threshold.*"
+{service="agent"} | json | msg=~"tool_error tool=search_news_semantic.*"
+{service="agent"} | json | msg=~"tool_error tool=search_news_fulltext.*"
+{service="agent"} | json | msg=~"slow llm call.*"
+{service="agent"} | json | msg=~"llm call failed.*"
+```
+
+**Narrow to one tool or ticker:**
+```logql
+{service="agent"} | json | msg=~"tool_error tool=get_price_history.*"
+{service="agent"} |= "AAPL"                 # crude but works — searches raw text
+```
+
+**Metric queries** (turn logs into a rate/count — renders as a graph, not a log list):
+```logql
+sum(rate({service="agent"} |= "tool_error" [5m]))                       # tool_error lines/sec
+sum(count_over_time({service="agent"} | json | level="ERROR" [1h]))     # error count, last hour
+sum by (service) (rate({job="docker"}[5m]))                             # log volume per service
+```
+
+**Combine multiple conditions:**
+```logql
+{service="agent"} | json | level="WARNING" | msg=~".*token threshold.*"
+{service="agent"} | json | trace_id="abc123" | level!="INFO"   # only non-INFO lines for one trace
+```
+
+**Time range**: the query box only holds the filter — set the actual window with Grafana's time picker (top-right), or via API `start`/`end` params (see below).
+
+**Gotchas**: label matching (`service="agent"`) is exact-string; `msg=~"..."` after `| json` is regex, so a literal `.` needs escaping if you mean it literally, not "any character."
 
 **Trace correlation, both directions**: the agent's JSON logs always carry a top-level `trace_id` field when one is available (see `agent/observability.py`'s `JsonFormatter`).
 - **Log → trace**: in Grafana's log view (Explore → Loki), any line containing `"trace_id":"..."` gets an automatic **TraceID** link (a `derivedField` on the Loki datasource, pointing at Jaeger) — click it to jump straight from a log line to the exact trace that produced it.
