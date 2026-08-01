@@ -173,6 +173,12 @@ The "Agent Platform Overview" dashboard (Grafana → Dashboards, or http://local
 
 **If you see two series for what should be one model** (e.g. an old alias like `claude-agent` alongside the real `anthropic/...` name): that's stale history from before a labeling change, not a second model actually running — Prometheus starts a new time series whenever a label *value* changes, it doesn't rewrite old samples. The stale series has no new data coming in and will age out of any rolling time window on its own; no action needed unless you want to wipe Prometheus's `promdata` volume for a clean slate (which also discards everything else's history).
 
+### Agent Custom Metrics (raw)
+
+A second dashboard (`observability/grafana/dashboards/json/agent-custom-metrics.json`, uid `agent-custom-metrics`) — one panel per custom `agent_*` metric, nothing curated or aggregated beyond a simple rate/average. Exists because Grafana's own **Metrics** auto-discovery view (Explore → Metrics) mixes our 10 custom metrics in with the ~10 `python_*`/`process_*` metrics `prometheus_client` registers automatically (and expands further per label-combination/histogram-bucket, so it shows 50+ panels there, not 10) — this dashboard is the "just the 10 things we actually instrument, nothing else" view. See the earlier chat-style breakdown of which of the 30 raw `/metrics` HELP lines are custom vs. freebie if you want the full accounting; the short version is 10 metrics we defined in `agent/observability.py`, each expanding into 2 (`Counter`s: `_total`+`_created`) or 4 (`Histogram`s: `_bucket`+`_sum`+`_count`+`_created`) raw series.
+
+Histogram panels here show a rolling **average** (`sum(rate(x_sum[5m])) / sum(rate(x_count[5m]))`) rather than percentiles — the curated dashboard above already has p50/p95 for task duration and tokens; this one prioritizes "one simple number per metric" over duplicating that.
+
 ## Viewing logs
 
 Every container's stdout is captured — `alloy` discovers all of them via the Docker API (no per-service config needed; add a new service to `docker-compose.yaml` and its logs start flowing automatically) and ships them to `loki`.

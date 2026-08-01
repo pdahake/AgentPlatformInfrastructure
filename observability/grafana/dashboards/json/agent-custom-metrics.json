@@ -1,0 +1,107 @@
+{
+  "title": "Agent Custom Metrics (raw)",
+  "uid": "agent-custom-metrics",
+  "description": "One panel per custom agent_* metric we actually instrument in agent/observability.py — deliberately excludes the python_*/process_* metrics prometheus_client registers automatically. See the curated 'Agent Platform Overview' dashboard for business-level views of the same data; this one is a raw 1:1 inventory.",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "agent_tasks_total",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(agent_tasks_total[5m])) by (status)", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "agent_task_duration_seconds (avg)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "sum(rate(agent_task_duration_seconds_sum[5m])) / sum(rate(agent_task_duration_seconds_count[5m]))", "legendFormat": "avg duration" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "agent_llm_calls_total",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_calls_total[5m])) by (model, status)", "legendFormat": "{{model}}/{{status}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "agent_llm_call_duration_seconds (avg)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_call_duration_seconds_sum[5m])) by (model) / sum(rate(agent_llm_call_duration_seconds_count[5m])) by (model)", "legendFormat": "{{model}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "agent_tool_calls_total",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "sum(rate(agent_tool_calls_total[5m])) by (tool, status)", "legendFormat": "{{tool}}/{{status}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "agent_tool_call_duration_seconds (avg)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        { "expr": "sum(rate(agent_tool_call_duration_seconds_sum[5m])) by (tool) / sum(rate(agent_tool_call_duration_seconds_count[5m])) by (tool)", "legendFormat": "{{tool}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "agent_llm_tokens_total",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_tokens_total[5m])) by (model, type)", "legendFormat": "{{model}}/{{type}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "agent_task_tokens_total (avg per task)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "expr": "sum(rate(agent_task_tokens_total_sum[5m])) / sum(rate(agent_task_tokens_total_count[5m]))", "legendFormat": "avg tokens/task" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "agent_llm_cost_usd_total",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_cost_usd_total[5m])) by (model)", "legendFormat": "{{model}}" }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "agent_task_cost_usd (avg per task)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [
+        { "expr": "sum(rate(agent_task_cost_usd_sum[5m])) / sum(rate(agent_task_cost_usd_count[5m]))", "legendFormat": "avg cost/task" }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}
