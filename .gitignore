@@ -14,3 +14,10 @@ __pycache__/
 # way, see ingest/ingest.py's open_raw()), it won't get accidentally committed
 # uncompressed.
 data/raw/*.csv
+
+# Local-only full-embedding export (20,000 embedded rows), kept on this
+# machine for convenience — too large (>100MB) to push to GitHub. The
+# tracked data/export/news_headlines.copy.gz carries a smaller (10,000
+# embedded row) subset instead so a fresh clone still gets working semantic
+# search without hitting GitHub's file size limit.
+data/export/*.local20k
