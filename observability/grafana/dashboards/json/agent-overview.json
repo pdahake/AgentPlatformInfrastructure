@@ -1,0 +1,96 @@
+{
+  "title": "Agent Platform Overview",
+  "uid": "agent-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Task runs / min",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "sum(rate(agent_tasks_total[5m])) by (status)", "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Task duration (p50/p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "LLM calls by status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_calls_total[5m])) by (model, status)", "legendFormat": "{{model}}/{{status}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Tool calls by tool/status",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "sum(rate(agent_tool_calls_total[5m])) by (tool, status)", "legendFormat": "{{tool}}/{{status}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Token usage rate (prompt vs completion)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_tokens_total[5m])) by (model, type)", "legendFormat": "{{model}}/{{type}}" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tokens per task (p50/p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(agent_task_tokens_total_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(agent_task_tokens_total_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Total tokens used (prompt + completion)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 24 },
+      "targets": [
+        { "expr": "sum(agent_llm_tokens_total)" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Total cost (USD)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 } },
+      "targets": [
+        { "expr": "sum(agent_llm_cost_usd_total)" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Cost by model ($/5m)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_cost_usd_total[5m])) by (model)", "legendFormat": "{{model}}" }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}

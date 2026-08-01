@@ -1,0 +1,26 @@
+# LiteLLM proxy config — the single place model/provider choice lives.
+# The agent and ingest services never see ANTHROPIC_API_KEY / OPENAI_API_KEY
+# directly; they call this gateway by model alias with a local virtual key.
+model_list:
+  - model_name: claude-agent
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: gpt-agent
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  drop_params: true
+  num_retries: 2
+  request_timeout: 60
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

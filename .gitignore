@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.pgdata/
+
+# data/raw/*.csv.gz (the actual raw Kaggle data, gzipped) and
+# data/export/*.gz (a pre-built ingest cache derived from it) are both
+# deliberately TRACKED, not ignored — together they mean a fresh clone's
+# `docker compose up` needs zero credentials and zero network calls beyond
+# pulling Docker images: no Kaggle account, no manual data download. See
+# DECISIONS.md's "Ingestion source" row for why. Only the plain, uncompressed
+# .csv is ignored below — if you drop a fresh CSV from Kaggle directly into
+# data/raw/ for local testing (DATA_SOURCE=raw reads it transparently either
+# way, see ingest/ingest.py's open_raw()), it won't get accidentally committed
+# uncompressed.
+data/raw/*.csv

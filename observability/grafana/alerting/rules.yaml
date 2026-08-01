@@ -1,0 +1,329 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: agent-platform-alerts
+    folder: Agent Platform
+    interval: 1m
+    rules:
+      - uid: semantic-search-failing
+        title: Semantic search failing
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: "search_news_semantic is returning tool_error — likely no headlines are embedded (check OPENAI_API_KEY quota on the litellm gateway)"
+          logs_link: 'http://localhost:3000/explore?schemaVersion=1&panes=%7B%22loki-explore%22%3A%20%7B%22datasource%22%3A%20%22loki%22%2C%20%22queries%22%3A%20%5B%7B%22refId%22%3A%20%22A%22%2C%20%22expr%22%3A%20%22%7Bservice%3D%5C%22agent%5C%22%7D%20%7C%20json%20%7C%20msg%3D~%5C%22tool_error%20tool%3Dsearch_news_semantic.%2A%5C%22%22%2C%20%22queryType%22%3A%20%22range%22%2C%20%22datasource%22%3A%20%7B%22type%22%3A%20%22loki%22%2C%20%22uid%22%3A%20%22loki%22%7D%7D%5D%2C%20%22range%22%3A%20%7B%22from%22%3A%20%22now-1h%22%2C%20%22to%22%3A%20%22now%22%7D%7D%7D&orgId=1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              editorMode: code
+              expr: sum(rate(agent_tool_calls_total{tool="search_news_semantic", status="tool_error"}[5m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+
+      # Asked-for #2: per-task token usage over a configured threshold.
+      # Uses the agent_task_tokens_total histogram's own bucket boundaries —
+      # 10000 must be an exact bucket boundary (see observability.py) for this
+      # subtraction trick (count above +Inf minus count above 10000 = count
+      # of observations that landed strictly above 10000) to work.
+      - uid: task-tokens-exceed-threshold
+        title: Task token usage exceeds threshold
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: "A task used more than 10,000 tokens in the last 10 minutes — usually means several failed tool-call retries accumulated context"
+          logs_link: 'http://localhost:3000/explore?schemaVersion=1&panes=%7B%22loki-explore%22%3A%20%7B%22datasource%22%3A%20%22loki%22%2C%20%22queries%22%3A%20%5B%7B%22refId%22%3A%20%22A%22%2C%20%22expr%22%3A%20%22%7Bservice%3D%5C%22agent%5C%22%7D%20%7C%20json%20%7C%20msg%3D~%5C%22task%20exceeded%20token%20threshold.%2A%5C%22%22%2C%20%22queryType%22%3A%20%22range%22%2C%20%22datasource%22%3A%20%7B%22type%22%3A%20%22loki%22%2C%20%22uid%22%3A%20%22loki%22%7D%7D%5D%2C%20%22range%22%3A%20%7B%22from%22%3A%20%22now-1h%22%2C%20%22to%22%3A%20%22now%22%7D%7D%7D&orgId=1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              # NOTE: le is a string label — prometheus_client formats whole-number
+              # bucket boundaries with a trailing ".0" (le="10000.0", not "10000").
+              # Cost buckets below don't need this since 0.05 already has a
+              # fractional representation. Verify with `agent_task_tokens_total_bucket`
+              # in Prometheus directly if you ever change these bucket boundaries.
+              expr: sum(increase(agent_task_tokens_total_bucket{le="+Inf"}[10m])) - sum(increase(agent_task_tokens_total_bucket{le="10000.0"}[10m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+
+      # Asked-for #3: per-task cost over a configured threshold ($0.05).
+      # Same bucket-subtraction technique as the token alert above, against
+      # the new agent_task_cost_usd histogram (added specifically to make
+      # this alert possible — a Counter alone can't answer "did any single
+      # task cost more than $X").
+      - uid: task-cost-exceeds-threshold
+        title: Task cost exceeds threshold
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: "A task cost more than $0.05 in the last 10 minutes"
+          logs_link: 'http://localhost:3000/explore?schemaVersion=1&panes=%7B%22loki-explore%22%3A%20%7B%22datasource%22%3A%20%22loki%22%2C%20%22queries%22%3A%20%5B%7B%22refId%22%3A%20%22A%22%2C%20%22expr%22%3A%20%22%7Bservice%3D%5C%22agent%5C%22%7D%20%7C%20json%20%7C%20msg%3D~%5C%22task%20exceeded%20cost%20threshold.%2A%5C%22%22%2C%20%22queryType%22%3A%20%22range%22%2C%20%22datasource%22%3A%20%7B%22type%22%3A%20%22loki%22%2C%20%22uid%22%3A%20%22loki%22%7D%7D%5D%2C%20%22range%22%3A%20%7B%22from%22%3A%20%22now-1h%22%2C%20%22to%22%3A%20%22now%22%7D%7D%7D&orgId=1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              expr: sum(increase(agent_task_cost_usd_bucket{le="+Inf"}[10m])) - sum(increase(agent_task_cost_usd_bucket{le="0.05"}[10m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+
+      # Asked-for #4: a service is down. Deliberately NOT reduced to a single
+      # value — probe_success returns one series per probed target (see
+      # prometheus.yml's blackbox-http/blackbox-tcp jobs), and Grafana's
+      # unified alerting creates one alert *instance* per series automatically,
+      # so this fires separately per service and names which one in the
+      # instance label, rather than one opaque "something somewhere is down."
+      - uid: service-down
+        title: A service is down
+        condition: C
+        for: 1m
+        noDataState: Alerting
+        execErrState: Error
+        annotations:
+          # $labels.instance renders to the actual probed target (e.g.
+          # "postgres:5432") once you're viewing a firing instance of this
+          # rule (Alerting -> Alert rules -> this rule -> expand an instance)
+          # — the rule-definition list view always shows the raw template,
+          # that's normal Grafana behavior, not a sign it's broken.
+          summary: "{{ $labels.instance }} failed its health probe"
+          find_the_service: 'docker compose logs <service-name> — match $labels.instance back to the docker-compose.yaml service (e.g. "postgres:5432" -> `docker compose logs postgres`)'
+        labels:
+          severity: critical
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 120
+              to: 0
+            model:
+              editorMode: code
+              expr: probe_success
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 120
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [1]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+
+      # Bonus: catches systemic problems (e.g. MAX_ITERATIONS exhaustion
+      # becoming common) that the semantic-search alert above wouldn't —
+      # that one only fires for one specific known failure mode.
+      - uid: task-failure-rate-high
+        title: Task failure rate high
+        condition: C
+        for: 2m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: "Over 20% of tasks failed in the last 10 minutes"
+          logs_link: 'http://localhost:3000/explore?schemaVersion=1&panes=%7B%22loki-explore%22%3A%20%7B%22datasource%22%3A%20%22loki%22%2C%20%22queries%22%3A%20%5B%7B%22refId%22%3A%20%22A%22%2C%20%22expr%22%3A%20%22%7Bservice%3D%5C%22agent%5C%22%7D%20%7C%20json%20%7C%20level%3D%5C%22ERROR%5C%22%22%2C%20%22queryType%22%3A%20%22range%22%2C%20%22datasource%22%3A%20%7B%22type%22%3A%20%22loki%22%2C%20%22uid%22%3A%20%22loki%22%7D%7D%5D%2C%20%22range%22%3A%20%7B%22from%22%3A%20%22now-1h%22%2C%20%22to%22%3A%20%22now%22%7D%7D%7D&orgId=1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              expr: sum(rate(agent_tasks_total{status="failed"}[10m])) / sum(rate(agent_tasks_total[10m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.2]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+
+      # Bonus: distinct from tool errors — this specifically catches the
+      # litellm gateway or upstream provider (Anthropic/OpenAI) itself
+      # failing, e.g. an outage or an auth/quota problem on the LLM call path.
+      - uid: llm-call-error-rate
+        title: LLM call errors
+        condition: C
+        for: 1m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: "LLM calls (via litellm) are failing — check litellm logs/quota, not a tool-level problem"
+          logs_link: 'http://localhost:3000/explore?schemaVersion=1&panes=%7B%22loki-explore%22%3A%20%7B%22datasource%22%3A%20%22loki%22%2C%20%22queries%22%3A%20%5B%7B%22refId%22%3A%20%22A%22%2C%20%22expr%22%3A%20%22%7Bservice%3D%5C%22agent%5C%22%7D%20%7C%20json%20%7C%20msg%3D~%5C%22llm%20call%20failed.%2A%5C%22%22%2C%20%22queryType%22%3A%20%22range%22%2C%20%22datasource%22%3A%20%7B%22type%22%3A%20%22loki%22%2C%20%22uid%22%3A%20%22loki%22%7D%7D%5D%2C%20%22range%22%3A%20%7B%22from%22%3A%20%22now-1h%22%2C%20%22to%22%3A%20%22now%22%7D%7D%7D&orgId=1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              editorMode: code
+              expr: sum(rate(agent_llm_calls_total{status="error"}[5m]))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]
+
+      # Bonus: catches provider-side degradation (litellm/Anthropic/OpenAI
+      # getting slow) before it starts causing MAX_ITERATIONS/timeout
+      # failures — a leading indicator, not just a lagging one.
+      - uid: llm-call-latency-high
+        title: LLM call latency high (p95)
+        condition: C
+        for: 2m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: "p95 LLM call latency over the last 10 minutes exceeds 15s"
+          logs_link: 'http://localhost:3000/explore?schemaVersion=1&panes=%7B%22loki-explore%22%3A%20%7B%22datasource%22%3A%20%22loki%22%2C%20%22queries%22%3A%20%5B%7B%22refId%22%3A%20%22A%22%2C%20%22expr%22%3A%20%22%7Bservice%3D%5C%22agent%5C%22%7D%20%7C%20json%20%7C%20msg%3D~%5C%22slow%20llm%20call.%2A%5C%22%22%2C%20%22queryType%22%3A%20%22range%22%2C%20%22datasource%22%3A%20%7B%22type%22%3A%20%22loki%22%2C%20%22uid%22%3A%20%22loki%22%7D%7D%5D%2C%20%22range%22%3A%20%7B%22from%22%3A%20%22now-1h%22%2C%20%22to%22%3A%20%22now%22%7D%7D%7D&orgId=1'
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              editorMode: code
+              expr: histogram_quantile(0.95, sum(rate(agent_llm_call_duration_seconds_bucket[10m])) by (le))
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [15]
+                  operator:
+                    type: and
+                  query:
+                    params: [A]

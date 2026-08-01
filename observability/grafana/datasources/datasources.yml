@@ -1,0 +1,41 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    jsonData:
+      tracesToLogsV2:
+        # Mirror of the Loki -> Jaeger derivedField below: lets you click from
+        # inside a trace view (any span) straight to its correlated Loki logs.
+        # Hardcoded to service="agent" rather than deriving it from span tags
+        # because the agent is currently the only service that emits traces —
+        # revisit if a second traced service is ever added.
+        datasourceUid: loki
+        filterByTraceID: false
+        filterBySpanID: false
+        customQuery: true
+        query: '{service="agent"} | json | trace_id="$${__trace.traceId}"'
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      derivedFields:
+        # Turns any `"trace_id":"<hex>"` found in a log line into a clickable
+        # link that opens the matching trace in the Jaeger datasource, right
+        # from Grafana's log view. Relies on the agent's JsonFormatter always
+        # emitting trace_id as a top-level JSON field (see agent/observability.py).
+        - datasourceUid: jaeger
+          matcherRegex: "\"trace_id\":\\s*\"(\\w+)\""
+          name: TraceID
+          url: "$${__value.raw}"
