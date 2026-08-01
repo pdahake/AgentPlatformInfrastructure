@@ -358,6 +358,27 @@ def embed_news_subset(conn) -> bool:
         log.warning("news embeddings: no rows were successfully embedded, skipping ANN index build")
         return False
 
+    return True
+
+
+def ensure_ann_index(conn):
+    """
+    Creates the ivfflat ANN index on news_headlines.embedding if embedded rows
+    exist and the index doesn't yet. Deliberately NOT tied to "did this run
+    just embed something" — embeddings can also arrive via a DATA_SOURCE=auto
+    export restore (COPY carries the vector data through fine, pgvector's
+    text/binary I/O for the type is transparent to standard Postgres tooling),
+    but an index is DDL, not data — no export/COPY mechanism ever carries an
+    index along, so it has to be (re-)created explicitly on every run
+    regardless of how the embedded data got there. Cheap to call every time:
+    CREATE INDEX IF NOT EXISTS + ivfflat requires real data to cluster well
+    (hence checking embedded count first), and no-ops instantly if already built.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM news_headlines WHERE embedding IS NOT NULL")
+        embedded_count = cur.fetchone()[0]
+    if embedded_count == 0:
+        return
     with conn.cursor() as cur:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_news_embedding ON news_headlines "
@@ -365,8 +386,7 @@ def embed_news_subset(conn) -> bool:
             "WHERE embedding IS NOT NULL"
         )
     conn.commit()
-    log.info("news embeddings: ANN index built")
-    return True
+    log.info("news embeddings: ANN index present (%d embedded rows)", embedded_count)
 
 
 def wait_for_postgres():
@@ -427,6 +447,12 @@ def main():
         # already carries whatever embeddings its source run produced.
         if "news_headlines" in dirty:
             embed_news_subset(conn)
+
+        # Unconditional (not gated on `dirty`): the ANN index is DDL, not
+        # data, so it never travels via export/COPY the way embeddings do —
+        # this has to run every time regardless of whether embeddings arrived
+        # fresh this run or were restored from an already-embedded export.
+        ensure_ann_index(conn)
 
         if dirty:
             log.info("exporting freshly loaded tables for fast restore next run: %s", sorted(dirty))

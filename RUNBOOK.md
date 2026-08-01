@@ -327,7 +327,9 @@ Run standalone, **before** the normal `docker compose up`:
 NEWS_EMBED_LIMIT=1244184 DATA_SOURCE=raw EXPORT_OVERWRITE=true \
     docker compose run --rm ingest
 ```
-This calls OpenAI ~12,500 times (batches of 100) — expect real cost and a long run (rate-limit dependent). It writes a fully-embedded `data/export/news_headlines.copy.gz`; every `docker compose up` after that restores it automatically (`DATA_SOURCE=auto`, the default) with no re-embedding.
+This calls OpenAI ~12,500 times (batches of 100) — expect real cost and a long run (rate-limit dependent). It writes a fully-embedded `data/export/news_headlines.copy.gz`; every `docker compose up` after that restores it automatically (`DATA_SOURCE=auto`, the default) with **no re-embedding and no further OpenAI calls** — the embedding vectors are just another column, and standard Postgres `COPY` (what the export/import uses) handles pgvector's `vector` type transparently, no special-casing needed.
+
+The pgvector ANN index (`idx_news_embedding`) does **not** travel via that export the same way — it's DDL, not data, and no data-export mechanism (`COPY`, `pg_dump --data-only`, etc.) ever includes an index. `ingest.py`'s `ensure_ann_index()` handles this by checking "are there embedded rows and does the index not exist yet" on *every* run, independent of whether this run did the embedding or restored it from export — so the index still gets built correctly on a fresh `DATA_SOURCE=auto` restore, not just on the original embedding run.
 
 ### Quick small-scale dev iteration (don't touch the real export)
 ```bash
