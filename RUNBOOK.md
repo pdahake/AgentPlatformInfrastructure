@@ -358,6 +358,16 @@ docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -
 
 ## Troubleshooting
 
+**Dashboards/datasources aren't picking up a provisioning config change (e.g. moved to a different folder) even after `docker compose restart grafana`**
+Grafana's file-based provisioner only applies certain settings — like which folder a dashboard lives in — at the moment it *first* creates that object. Changing `observability/grafana/dashboards/dashboards.yml`'s `folder:` (or similar) afterward and restarting does not retroactively move already-provisioned dashboards; Grafana also blocks deleting a provisioned dashboard/folder via the UI or API (`"provisioned dashboard cannot be deleted"`) specifically so it can't drift from the file. The actual fix is to force a fresh reprovision:
+```bash
+docker compose stop grafana
+docker compose rm -f grafana
+docker volume rm agent-platform_grafanadata
+docker compose up -d grafana
+```
+This wipes Grafana's own state (dashboard star/view history, anonymous session, etc. — nothing that matters here) and rebuilds everything from the committed YAML/JSON, which is the actual desired state anyway. Same root cause as the `$${...}` env-var-substitution gotcha under [Alerts](#alerts) — Grafana's provisioning system generally treats "already provisioned" objects as something to reconcile *forward* from, not fully re-derive from a changed config file.
+
 **`ingest` exits 1 immediately with `DATA_SOURCE=export but no export file found`**
 You forced `DATA_SOURCE=export` before any raw run ever produced `data/export/*.copy.gz`. Either unset `DATA_SOURCE` (defaults to `auto`, which falls back to raw automatically) or run once with `DATA_SOURCE=raw`.
 
