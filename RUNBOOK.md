@@ -193,6 +193,26 @@ A second dashboard (`observability/grafana/dashboards/json/agent-custom-metrics.
 
 Histogram panels here show a rolling **average** (`sum(rate(x_sum[5m])) / sum(rate(x_count[5m]))`) rather than percentiles — the curated dashboard above already has p50/p95 for task duration and tokens; this one prioritizes "one simple number per metric" over duplicating that.
 
+### RED (agent) / USE (infrastructure) metrics coverage
+
+**RED — Rate, Errors, Duration — is fully covered for the agent**, at finer granularity than the textbook version (broken down per tool and per resolved model, not just in aggregate):
+
+| RED signal | Metric(s) | Example query |
+|---|---|---|
+| **Rate** | `agent_tasks_total`, `agent_llm_calls_total{model,status}`, `agent_tool_calls_total{tool,status}` | `sum(rate(agent_tasks_total[5m])) by (status)` |
+| **Errors** | The `status` label (`ok`/`error`) on all three counters above | `sum(rate(agent_tool_calls_total{status="error"}[5m])) / sum(rate(agent_tool_calls_total[5m]))` |
+| **Duration** | `agent_task_duration_seconds`, `agent_llm_call_duration_seconds`, `agent_tool_call_duration_seconds` (all histograms — p50/p95/avg all derivable) | `histogram_quantile(0.95, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le))` |
+
+Two of the seven [alert rules](#alerts) (`task-failure-rate-high`, `llm-call-error-rate`) are directly Rate+Errors checks; `llm-call-latency-high` is a Duration check.
+
+**USE — Utilization, Saturation, Errors — is *not* covered for the underlying infrastructure.** This is a real, deliberate gap, not an oversight to paper over:
+
+- **Utilization** (CPU, memory, disk, network per container/host): nothing. There's no `cAdvisor` (container-level) or `node_exporter` (host-level) anywhere in `docker-compose.yaml`/`observability/prometheus.yml`. The `python_*`/`process_*` metrics `prometheus_client` adds for free only cover the `agent` process's own memory/GC/file-descriptor stats — not Postgres, litellm, or the host.
+- **Saturation** (queue depth, connection pool exhaustion): nothing exposed. The agent's Postgres connection pool (`psycopg_pool`, max 10 connections) has no corresponding metric — pool exhaustion would only be visible indirectly, as rising tool-call latency/errors, not as a direct signal.
+- **Errors** (infra-level: disk I/O errors, Postgres query errors, OOM kills): only a coarse substitute — `blackbox_exporter`'s `probe_success` (see [Alerts](#alerts)) gives binary up/down per service, which is "is it reachable," not a real error-rate signal for what's happening *inside* Postgres/litellm/etc.
+
+Adding `cAdvisor` + `node_exporter` (both scraped by the existing Prometheus, no new stack needed) would close this gap and is the natural next addition if operating this for real — see [DECISIONS.md](DECISIONS.md) for how this fits the project's broader "what's included vs. what's a documented future extension" framing.
+
 ## Viewing logs
 
 Every container's stdout is captured — `alloy` discovers all of them via the Docker API (no per-service config needed; add a new service to `docker-compose.yaml` and its logs start flowing automatically) and ships them to `loki`.
