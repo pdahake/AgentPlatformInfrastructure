@@ -75,7 +75,7 @@ docker compose ps                   # overall status once ingest exits
 ```bash
 docker compose ps --format 'table {{.Name}}\t{{.Status}}'
 ```
-All rows should read `Up ... (healthy)` except `jaeger` and `otel-collector` (no healthcheck defined) and `ingest` (should show `Exited (0)`).
+`postgres`, `litellm`, and `agent` should read `Up ... (healthy)` — those three are the only ones with a `healthcheck:` defined. Everything else (`jaeger`, `otel-collector`, `prometheus`, `blackbox-exporter`, `loki`, `alloy`, `grafana`) will just show `Up ...` with no health suffix — that's normal, not a sign anything's wrong, they just don't have Docker-level healthchecks configured (their actual health is what `blackbox-exporter`'s probes and the "A service is down" alert check instead, see [Alerts](#alerts)). `ingest` should show `Exited (0)`.
 
 Spot checks:
 ```bash
@@ -295,6 +295,14 @@ So: this link works as a clickable shortcut if you're browsing Grafana at litera
 
 ## Common operations
 
+### Change the agent's DB password
+`POSTGRES_AGENT_RO_PASSWORD` in `.env` — can be any string, doesn't need to match anything external. Unlike `POSTGRES_PASSWORD` (only applied by Postgres on a genuinely fresh volume), this one is re-synced via `ALTER ROLE` on every `ingest` run, so:
+```bash
+# edit POSTGRES_AGENT_RO_PASSWORD in .env, then:
+docker compose up -d --no-deps ingest agent
+```
+takes effect immediately — no volume wipe needed. (`ingest` re-applies `sql/schema.sql`, which sets the password unconditionally; `agent` needs recreating too so it picks up the new value in its own connection string.)
+
 ### Re-run ingest without restarting the whole stack
 ```bash
 docker compose up -d --no-deps ingest
@@ -359,7 +367,7 @@ docker compose logs agent
 ```
 Usually means it can't reach `postgres` or `litellm` yet, or the `agent_ro` role/grants from `sql/schema.sql` weren't applied (check `ingest` succeeded first — `agent` won't even start until `ingest` reports `service_completed_successfully`).
 
-**Port already in use (`5432`, `8000`, `3000`, `9090`, `16686`, `4000`, `3100`, `12346`)**
+**Port already in use (`5432`, `8000`, `3000`, `9090`, `9115`, `16686`, `4000`, `3100`, `12346`)**
 Something else on the host is bound to that port. Either stop it, or remap the host side in `docker-compose.yaml` (left side of `"HOST:CONTAINER"` under the relevant service's `ports:`). Hit exactly this with `alloy`'s default port `12345` on a host that already had a native Grafana Alloy agent running system-wide — that's why the compose file maps it to `12346:12345` instead; if your host's `12346` is also taken, remap again.
 
 **No logs showing up for a service in Grafana/Loki**
