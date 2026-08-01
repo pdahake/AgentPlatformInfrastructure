@@ -56,6 +56,13 @@ moment `docker compose up` starts scraping it.
 
 ![Metrics](metrics.jpg)
 
+That auto-discovery view mixes our metrics in with ~10 `python_*`/`process_*` runtime
+metrics `prometheus_client` registers for free, and expands further per label/bucket
+combination (50+ entries there, not 10) — there's also a dedicated **"Agent Custom
+Metrics (raw)"** dashboard with exactly one panel per custom metric, nothing else, for
+when you want the signal without the noise. Both dashboards live in Grafana's
+**"Agent Platform"** folder, alongside the 7 alert rules.
+
 **Metrics tell you something's off; logs tell you what.** Every one of the 11 services in
 this stack ships its logs here with zero per-service configuration — Alloy discovers
 containers via the Docker API, so a new service in `docker-compose.yaml` just starts
@@ -89,7 +96,8 @@ observability/    Prometheus, Grafana (dashboards/datasources/alerting), Loki, A
 scripts/          run_task.sh — the CLI that exercises the full stack end-to-end
 sql/              Postgres schema
 data/raw/         Raw Kaggle CSVs, gzipped, tracked in git
-data/export/      Pre-built Postgres COPY dumps, tracked in git — what makes a fresh clone's `docker compose up` need zero credentials beyond the two LLM provider keys
+data/export/      Pre-built Postgres COPY dumps, tracked in git — what makes a fresh clone's `docker compose up` need zero credentials beyond the two LLM provider keys (embeddings included, if present — pgvector's type round-trips through COPY transparently)
+README.md         This file
 DECISIONS.md      Design rationale, tradeoffs, production/Kubernetes architecture
 RUNBOOK.md        Operational reference
 ```
