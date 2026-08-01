@@ -70,6 +70,9 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "/data/raw"))
 EXPORT_DIR = Path(os.environ.get("EXPORT_DIR", "/data/export"))
 SCHEMA_FILE = Path(os.environ.get("SCHEMA_FILE", "/sql/schema.sql"))
 DSN = os.environ["POSTGRES_DSN"]
+# Required, no default — this is a real credential (the agent's read-only DB
+# role's password) and should never silently fall back to a guessable value.
+POSTGRES_AGENT_RO_PASSWORD = os.environ["POSTGRES_AGENT_RO_PASSWORD"]
 LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-local-master")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -184,7 +187,7 @@ def num(v):
 
 def apply_schema(conn: psycopg.Connection):
     log.info("applying schema from %s", SCHEMA_FILE)
-    sql_text = SCHEMA_FILE.read_text()
+    sql_text = SCHEMA_FILE.read_text().replace("__POSTGRES_AGENT_RO_PASSWORD__", POSTGRES_AGENT_RO_PASSWORD)
     with conn.cursor() as cur:
         cur.execute(sql_text)
     conn.commit()

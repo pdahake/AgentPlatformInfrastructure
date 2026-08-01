@@ -6,13 +6,21 @@
 
 CREATE EXTENSION IF NOT EXISTS vector;
 
+-- __POSTGRES_AGENT_RO_PASSWORD__ is substituted by ingest.py's apply_schema() from the
+-- POSTGRES_AGENT_RO_PASSWORD env var before this file is executed — never a literal
+-- credential in this tracked file. Role creation is idempotent (skips if it
+-- already exists); the password is set unconditionally every run via ALTER
+-- ROLE, so — unlike POSTGRES_PASSWORD, which Postgres only applies on a truly
+-- fresh volume — changing POSTGRES_AGENT_RO_PASSWORD in .env and re-running ingest
+-- actually takes effect, no volume wipe needed.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'agent_ro') THEN
-        CREATE ROLE agent_ro LOGIN PASSWORD 'agent_ro_password';
+        CREATE ROLE agent_ro LOGIN;
     END IF;
 END
 $$;
+ALTER ROLE agent_ro PASSWORD '__POSTGRES_AGENT_RO_PASSWORD__';
 
 CREATE TABLE IF NOT EXISTS fundamentals (
     id                          SERIAL PRIMARY KEY,
