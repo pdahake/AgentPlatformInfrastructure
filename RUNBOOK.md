@@ -70,6 +70,20 @@ docker compose logs -f ingest      # first-run progress / restore progress
 docker compose ps                   # overall status once ingest exits
 ```
 
+### `docker compose up` flags used in this runbook
+
+| Flag | What it does | Why/when here |
+|---|---|---|
+| `--build` | Rebuild `agent`/`ingest` images before starting, instead of reusing a stale local image | Needed any time you change code in `agent/` or `ingest/`, or their `Dockerfile`/`requirements.txt`. Harmless (just a cache-hit no-op) if nothing changed. |
+| `-d` / `--detach` | Run in the background instead of attaching to combined logs | Default for normal use; drop it (plain `docker compose up`) the first time you stand up the stack if you want to watch everything boot in one stream, `Ctrl-C` stops it all. |
+| `--no-deps <service>` | Start only the named service(s), skip its `depends_on` chain | Restart one service without disturbing the rest, e.g. `docker compose up -d --no-deps agent` after an env var change — see [Common operations](#common-operations) for concrete examples (DB password rotation, model switch, re-running ingest). |
+| `--force-recreate [service]` | Recreate the container even if its image/config is unchanged | `ingest` is a one-shot: once it's exited 0, plain `docker compose up` leaves it alone and won't rerun it. Use `docker compose up -d --force-recreate ingest` (or `docker compose rm -f ingest` first) to force a fresh ingest pass. |
+| `--wait` | Block until every started container reports healthy (or fails), then return | Useful in scripts, or when you just want a clear "stack is actually ready" signal instead of polling `docker compose ps` yourself: `docker compose up --build -d --wait`. |
+| `--remove-orphans` | Remove containers for services no longer present in `docker-compose.yaml` | Only relevant after renaming/deleting a service in the compose file — not needed for routine use. |
+| `--pull always` | Re-pull an image even if a local copy with the same tag already exists | Not needed here — every image in this stack is pinned to a specific version tag (e.g. `pgvector/pgvector:pg16`, `jaegertracing/all-in-one:1.60`), not `latest`, so a cached pull is always the right one. |
+
+Not a flag, but related: **`litellm` is consistently the slowest service to report healthy** (up to ~115s worst case — `start_period: 15s` + `interval: 10s` × `retries: 10` in its healthcheck). This is inherent to the image (full Python app, provider-credential validation at boot), not a misconfiguration — `agent` and `ingest` both wait on it (`depends_on: litellm: condition: service_healthy`), so it's usually the visible bottleneck in `docker compose ps` right after `up`.
+
 ## Verifying everything is healthy
 
 ```bash
