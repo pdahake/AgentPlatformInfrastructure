@@ -4,9 +4,9 @@ A local, docker-compose-based platform for running an LLM agent end-to-end again
 fundamentals/prices and 1.24M ABC News headlines — with the observability (metrics, logs,
 traces, alerting) a production deployment would actually need, not just a toy demo.
 
-- **What it does**: a FastAPI agent runs a tool-calling loop (via a LiteLLM gateway to
-  Claude/GPT) over four fixed, typed tools against Postgres+pgvector — no text-to-SQL,
-  no free-form DB access.
+- **What it does**: a FastAPI agent runs a tool-calling loop (the [Strands Agents SDK](https://strandsagents.com),
+  via a LiteLLM gateway to Claude/GPT) over four fixed, typed tools against Postgres+pgvector —
+  no text-to-SQL, no free-form DB access.
 - **Why it looks like this**: see [DECISIONS.md](DECISIONS.md) — what's included, what's
   deliberately left out, and how it evolves toward a real Kubernetes production deployment.
 - **How to run it / operate it**: see [RUNBOOK.md](RUNBOOK.md) — starting the stack, running
@@ -89,7 +89,7 @@ Panel-by-panel reference, alert semantics, and LogQL query examples are all in
 ## Repository layout
 
 ```
-agent/            FastAPI service — tool-calling loop, /run, /health, /metrics
+agent/            FastAPI service — Strands Agents SDK tool-calling loop, /run, /health, /metrics
 ingest/           One-shot data loader (CSV → Postgres, or fast restore from data/export/)
 litellm/          Model gateway config (provider/model routing)
 observability/    Prometheus, Grafana (dashboards/datasources/alerting), Loki, Alloy, blackbox_exporter configs

@@ -95,6 +95,12 @@ services:
       AGENT_MODEL: ${AGENT_MODEL:-claude-agent}
       EMBEDDING_MODEL: text-embedding-3-small
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      # Strands' StrandsTelemetry reads this for the trace resource's
+      # service.name (defaults to "strands-agents" otherwise) — the old
+      # manual TracerProvider setup hardcoded the same value in Python
+      # (observability.py's SERVICE_NAME), now sourced from the environment
+      # instead, standard OTel convention.
+      OTEL_SERVICE_NAME: agent
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s

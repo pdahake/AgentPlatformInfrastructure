@@ -5,20 +5,49 @@ Deliberately NOT text-to-SQL: the LLM never writes or sees raw SQL. Each
 tool is a typed Python function with validated parameters, executed against
 a read-only Postgres role (agent_ro). This bounds what a prompt-injected or
 misbehaving model can do to "query these four things," not "run anything."
+
+The `Tools` class below (DB access + validation) is framework-agnostic. The
+module-level `@tool`-decorated functions at the bottom are the Strands-facing
+surface: Strands' decorator generates each tool's JSON schema from the
+function's type hints + docstring, so schema and implementation can't drift
+apart — there's only one place either lives.
 """
 from __future__ import annotations
 
 import datetime as dt
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from typing import Any
 
-from openai import OpenAI
+import litellm
+from pgvector.psycopg import Vector
 from psycopg_pool import ConnectionPool
+from strands import tool
 
 TICKER_RE = re.compile(r"^[A-Z.\-]{1,10}$")
 
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
+LITELLM_MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "")
+
+# Strands has no native per-tool call timeout (checked: the `@tool` decorator
+# takes no timeout kwarg) — enforced here instead via a thread-pool wrapper
+# around each tool's DB work, bounding worst-case latency of a single tool
+# call. A raised TimeoutError propagates out of the decorated function;
+# Strands catches any exception raised inside a tool call and feeds it back
+# to the model as a normal tool-error message (verified empirically), so
+# this doesn't need its own try/except.
+TOOL_TIMEOUT_SECONDS = 20
+_tool_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="tool-call")
+
+
+def _with_timeout(fn, *args, **kwargs):
+    future = _tool_executor.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=TOOL_TIMEOUT_SECONDS)
+    except FutureTimeoutError:
+        raise TimeoutError(f"tool call timed out after {TOOL_TIMEOUT_SECONDS}s") from None
 
 
 class ToolError(Exception):
@@ -42,9 +71,8 @@ def _validate_date(value: str | None, field: str) -> dt.date | None:
 
 
 class Tools:
-    def __init__(self, pool: ConnectionPool, litellm_client: OpenAI):
+    def __init__(self, pool: ConnectionPool):
         self.pool = pool
-        self.litellm = litellm_client
 
     # -- market data -----------------------------------------------------
 
@@ -133,8 +161,19 @@ class Tools:
                     "use search_news_fulltext instead"
                 )
 
-        embedding = (
-            self.litellm.embeddings.create(model=EMBEDDING_MODEL, input=[query]).data[0].embedding
+        # Wrapped in pgvector's own Vector type — db.py's register_vector(conn)
+        # only registers a dumper for numpy.ndarray and Vector, never for a
+        # bare Python list (confirmed by reading pgvector's own register.py),
+        # so passing the raw list here would send it to Postgres as a
+        # double precision[] array and `embedding <=> $1` would fail with
+        # "operator does not exist: vector <=> double precision[]".
+        embedding = Vector(
+            litellm.embedding(
+                model=EMBEDDING_MODEL,
+                input=[query],
+                api_base=LITELLM_BASE_URL,
+                api_key=LITELLM_MASTER_KEY,
+            ).data[0]["embedding"]
         )
 
         clauses = ["embedding IS NOT NULL"]
@@ -210,71 +249,71 @@ class Tools:
         return rows
 
 
-TOOL_SCHEMAS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_fundamentals",
-            "description": "Get recent financial-statement fundamentals for a stock ticker (revenue, margins, EPS, balance sheet), most recent period first.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. AAPL"},
-                    "limit": {"type": "integer", "description": "Max periods to return (default 8)"},
-                },
-                "required": ["ticker"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_price_history",
-            "description": "Get daily OHLCV price history for a stock ticker, optionally scoped to a date range.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "ticker": {"type": "string", "description": "Stock ticker symbol, e.g. AAPL"},
-                    "date_from": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
-                    "date_to": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
-                    "limit": {"type": "integer", "description": "Max rows to return (default 60)"},
-                },
-                "required": ["ticker"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_news_semantic",
-            "description": "Semantic search over a recent-weighted subset of news headlines using embeddings. Best for conceptual/topical queries. Optionally scoped to a date range.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "k": {"type": "integer", "description": "Max results (default 8)"},
-                    "date_from": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
-                    "date_to": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "search_news_fulltext",
-            "description": "Keyword full-text search over ALL 1.24M news headlines (not just the embedded subset). Best for exact terms/names, or when semantic search returns nothing for the requested date range.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {"type": "string"},
-                    "k": {"type": "integer", "description": "Max results (default 8)"},
-                    "date_from": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
-                    "date_to": {"type": "string", "description": "YYYY-MM-DD, inclusive"},
-                },
-                "required": ["query"],
-            },
-        },
-    },
-]
+# -- Strands-facing tool surface --------------------------------------------
+#
+# `_tools` is set once at startup via `init_tools()` (called from app.py,
+# after `db.make_pool()` succeeds) rather than constructed here at import
+# time — same reasoning as before (a DB pool needs POSTGRES_DSN and a live
+# connection, which shouldn't happen as an import side effect).
+_tools: Tools | None = None
+
+
+def init_tools(pool: ConnectionPool) -> None:
+    global _tools
+    _tools = Tools(pool=pool)
+
+
+@tool
+def get_fundamentals(ticker: str, limit: int = 8) -> list[dict[str, Any]]:
+    """Get recent financial-statement fundamentals for a stock ticker (revenue, margins, EPS, balance sheet), most recent period first.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. AAPL
+        limit: Max periods to return (default 8)
+    """
+    return _with_timeout(_tools.get_fundamentals, ticker, limit)
+
+
+@tool
+def get_price_history(
+    ticker: str, date_from: str | None = None, date_to: str | None = None, limit: int = 60
+) -> list[dict[str, Any]]:
+    """Get daily OHLCV price history for a stock ticker, optionally scoped to a date range.
+
+    Args:
+        ticker: Stock ticker symbol, e.g. AAPL
+        date_from: YYYY-MM-DD, inclusive
+        date_to: YYYY-MM-DD, inclusive
+        limit: Max rows to return (default 60)
+    """
+    return _with_timeout(_tools.get_price_history, ticker, date_from, date_to, limit)
+
+
+@tool
+def search_news_semantic(
+    query: str, k: int = 8, date_from: str | None = None, date_to: str | None = None
+) -> list[dict[str, Any]]:
+    """Semantic search over a recent-weighted subset of news headlines using embeddings. Best for conceptual/topical queries. Optionally scoped to a date range.
+
+    Args:
+        query: Search text
+        k: Max results (default 8)
+        date_from: YYYY-MM-DD, inclusive
+        date_to: YYYY-MM-DD, inclusive
+    """
+    return _with_timeout(_tools.search_news_semantic, query, k, date_from, date_to)
+
+
+@tool
+def search_news_fulltext(
+    query: str, k: int = 8, date_from: str | None = None, date_to: str | None = None
+) -> list[dict[str, Any]]:
+    """Keyword full-text search over ALL 1.24M news headlines (not just the embedded subset). Best for exact terms/names, or when semantic search returns nothing for the requested date range.
+
+    Args:
+        query: Search text
+        k: Max results (default 8)
+        date_from: YYYY-MM-DD, inclusive
+        date_to: YYYY-MM-DD, inclusive
+    """
+    return _with_timeout(_tools.search_news_fulltext, query, k, date_from, date_to)

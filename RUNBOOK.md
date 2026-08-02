@@ -40,7 +40,7 @@ For *why* things are built this way, see [DECISIONS.md](DECISIONS.md).
 | `postgres` | Postgres 16 + pgvector — fundamentals, prices, news_headlines | 5432 |
 | `litellm` | Model gateway (Anthropic/OpenAI), holds the real provider keys | 4000 |
 | `ingest` | One-shot: loads CSVs / restores export, embeds a headline subset | — |
-| `agent` | FastAPI service: tool-calling loop, `/run`, `/health`, `/metrics` | 8000 |
+| `agent` | FastAPI service: Strands Agents SDK tool-calling loop, `/run`, `/health`, `/metrics` | 8000 |
 | `otel-collector` | Receives traces from `agent`, forwards to Jaeger | 4317 (internal) |
 | `jaeger` | Trace UI | 16686 |
 | `prometheus` | Scrapes `agent:8000/metrics` + blackbox probes of every service | 9090 |
@@ -451,8 +451,8 @@ You forced `DATA_SOURCE=export` before any raw run ever produced `data/export/*.
 **`ingest` logs long strings of `429 Too Many Requests` on `/embeddings`, then a `WARNING ... skipping semantic embedding entirely`**
 Expected and handled — either real rate limiting or (check the underlying error in `docker compose logs litellm`) an OpenAI key with no billing/quota (`insufficient_quota`). Ingest still completes successfully; `news_headlines` is fully loaded and full-text searchable, just not semantically embedded. `search_news_semantic` will return a clear tool error telling the agent to use `search_news_fulltext` instead — this is not a broken run.
 
-**A task run returns `502` with `exceeded MAX_ITERATIONS=6 without a final answer`**
-The model used all 6 tool-calling round trips without producing a final answer — usually a sign it kept retrying a failing tool. Open the `trace_id` from the error message in Jaeger and look at which tool kept erroring. If it's `search_news_semantic` failing repeatedly, confirm embeddings actually exist (`SELECT count(*) FROM news_headlines WHERE embedding IS NOT NULL` — see above); if zero, that's expected (see previous entry) and the model should have fallen back to `search_news_fulltext` — if it didn't, it's worth widening `MAX_ITERATIONS` in `agent/agent_loop.py` or tightening the system prompt.
+**A task run returns `502` with `agent stopped without a final answer (stop_reason=limit_turns, ...)`**
+The model used all 6 tool-calling round trips (`MAX_ITERATIONS`) without producing a final answer — usually a sign it kept retrying a failing tool. Open the `trace_id` from the error message in Jaeger and look at which tool kept erroring (`execute_tool` spans, or the `tool_error tool=<name>` warning in Loki — see [Viewing logs](#viewing-logs)). If it's `search_news_semantic` failing repeatedly, confirm embeddings actually exist (`SELECT count(*) FROM news_headlines WHERE embedding IS NOT NULL` — see above); if zero, that's expected (see previous entry) and the model should have fallen back to `search_news_fulltext` — if it didn't, it's worth widening `MAX_ITERATIONS` in `agent/agent_loop.py` or tightening the system prompt.
 
 **`agent` container stuck at `health: starting` / never becomes healthy**
 ```bash

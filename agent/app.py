@@ -4,7 +4,6 @@ import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
-from openai import OpenAI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel
@@ -12,22 +11,23 @@ from pydantic import BaseModel
 from agent_loop import TaskFailed, run_task
 from db import make_pool
 from observability import TASK_COUNTER, TASK_LATENCY, setup_logging, setup_tracing
-from tools import Tools
+from tools import init_tools
 
 setup_logging()
 log = logging.getLogger("app")
 tracer = setup_tracing()
 
 AGENT_MODEL = os.environ.get("AGENT_MODEL", "claude-agent")
-LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
-LITELLM_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 
 app = FastAPI(title="agent-platform")
 FastAPIInstrumentor.instrument_app(app)
 
 pool = make_pool()
-llm_client = OpenAI(base_url=LITELLM_BASE_URL, api_key=LITELLM_MASTER_KEY, max_retries=1)
-tools = Tools(pool=pool, litellm_client=llm_client)
+# Wires the DB pool into tools.py's module-level Tools instance, which the
+# @tool-decorated functions Strands calls delegate to — LITELLM_BASE_URL/
+# LITELLM_MASTER_KEY for the litellm proxy connection now live in
+# agent_loop.py itself (LiteLLMModel is built per-task there), not here.
+init_tools(pool)
 
 
 class RunRequest(BaseModel):
@@ -73,7 +73,7 @@ def run(req: RunRequest):
     log.info("task started model=%s task=%r", model, req.task[:200])
 
     try:
-        result = run_task(llm_client, model, tools, req.task, req.date_from, req.date_to)
+        result = run_task(model, req.task, req.date_from, req.date_to)
     except TaskFailed as e:
         TASK_COUNTER.labels(status="failed").inc()
         log.error("task failed error=%s", e, extra={"trace_id": e.trace_id})
