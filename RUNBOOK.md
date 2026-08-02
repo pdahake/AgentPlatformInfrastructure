@@ -186,7 +186,7 @@ curl -s -X POST localhost:8000/run -H 'content-type: application/json' \
 
 ## Dashboard panels
 
-The "Agent Platform Overview" dashboard (Grafana → Dashboards, or http://localhost:3000/d/agent-overview) has 9 panels, sourced from `observability/grafana/dashboards/json/agent-overview.json`. `model` in any of these is the **resolved** provider/model (e.g. `anthropic/claude-sonnet-4-5-20250929`, from litellm's `x-litellm-model-name` response header) — not the `AGENT_MODEL` routing alias (e.g. `claude-agent`).
+The "Agent Platform Overview" dashboard (Grafana → Dashboards, or http://localhost:3000/d/agent-overview) has 14 panels, sourced from `observability/grafana/dashboards/json/agent-overview.json`. `model` in any of these is the **resolved** provider/model (e.g. `anthropic/claude-sonnet-4-5-20250929`) — not the `AGENT_MODEL` routing alias (e.g. `claude-agent`); resolved via a small local `ALIAS_TO_MODEL` map in `agent/agent_loop.py`, since Strands doesn't expose litellm proxy's response headers the way the alias used to be resolved.
 
 | # | Panel | Query | What it tells you |
 |---|---|---|---|
@@ -196,9 +196,14 @@ The "Agent Platform Overview" dashboard (Grafana → Dashboards, or http://local
 | 4 | Tool calls by tool/status | `sum(rate(agent_tool_calls_total[5m])) by (tool, status)` | Same, per tool. `search_news_semantic` showing steady `tool_error` is expected until the embedding subset is populated (see Troubleshooting). |
 | 5 | Token usage rate (prompt vs completion) | `sum(rate(agent_llm_tokens_total[5m])) by (model, type)` | Tokens/sec, split prompt vs completion, per resolved model. |
 | 6 | Tokens per task (p50/p95) | `histogram_quantile(...agent_task_tokens_total_bucket...)` | Distribution of total tokens per completed task — typical size vs. a long tail of expensive ones. |
-| 7 | Total tokens used | `sum(agent_llm_tokens_total)` | Running total. **Cumulative since the `agent` container last started** — resets on restart/rebuild (in-memory counter), even though Prometheus's own history (panels 1-6, 9) survives that. |
-| 8 | Total cost (USD) | `sum(agent_llm_cost_usd_total)` | Same idea in real dollars — litellm's actual billed cost per call, not a token-count estimate. Same restart caveat as #7. |
+| 7 | Total tokens used | `sum(increase(agent_llm_tokens_total[$__range]))` | Total over whatever time range the dashboard picker is set to. Uses `increase()`, not a bare counter read — a raw `sum(metric)` ignores the time picker entirely and just shows "value right now," which silently resets to a small/misleading number on every `agent` container restart (hit this for real; see [DECISIONS.md](DECISIONS.md)). |
+| 8 | Total cost (USD) | `sum(increase(agent_llm_cost_usd_total[$__range]))` | Same idea in real dollars — computed via `litellm.cost_per_token()` against the resolved model, not a token-count estimate. Same `increase()`-over-range pattern as #7. |
 | 9 | Cost by model ($/5m) | `sum(rate(agent_llm_cost_usd_total[5m])) by (model)` | Spend rate over time, per resolved model — useful once routing across multiple models/providers. |
+| 10 | Task failure rate (min. 30m window) | `100 * sum(increase(agent_tasks_total{status="failed"}[$__range])) / sum(increase(agent_tasks_total[$__range]))` | Pinned to a 30-minute window (Grafana panel-level `timeFrom`) regardless of the dashboard's selected range — a shorter window on a low-traffic system only contains a handful of tasks, and one failure among 2-3 swings this to 33%/50%/etc without reflecting any real underlying rate. Color-coded: green <5%, yellow 5-20%, red >20% (matching the `task-failure-rate-high` alert threshold). |
+| 11 | Task failures (selected range) | `sum(increase(agent_tasks_total{status="failed"}[$__range]))` | Raw failure count over the dashboard's selected range — no minimum-window guard needed since it's a count, not a ratio. |
+| 12 | Errors by type (task/LLM/tool) | Three series: `agent_tasks_total{status="failed"}`, `agent_llm_calls_total{status="error"}`, `agent_tool_calls_total{status="tool_error"}`, each `rate(...[5m])` | All three error categories on one graph, so a spike in any of them is visible without cross-referencing three separate "by status" panels. |
+| 13 | Tool error rate by tool | `sum(rate(agent_tool_calls_total{status="tool_error"}[5m])) by (tool)` | Isolated to errors only (unlike panel 4, which mixes `ok` and `tool_error` in the same legend) — which specific tool is failing, at a glance. |
+| 14 | LLM call error rate by model | `sum(rate(agent_llm_calls_total{status="error"}[5m])) by (model)` | Same isolation for LLM call failures, by resolved model. |
 
 ### Agent Custom Metrics (raw)
 
@@ -209,6 +214,8 @@ Histogram panels here show a rolling **average** (`sum(rate(x_sum[5m])) / sum(ra
 ### Postgres Overview
 
 A third dashboard (`observability/grafana/dashboards/json/postgres-overview.json`, uid `postgres-overview`) — DB-level metrics, sourced from `postgres_exporter` (a new service; Postgres has no native `/metrics` endpoint of its own). Scraped by Prometheus's `postgres` job (`postgres-exporter:9187`), same 10s interval as everything else.
+
+![Postgres Overview](postgres_overview.jpg)
 
 | # | Panel | Query | What it tells you |
 |---|---|---|---|
@@ -240,7 +247,7 @@ docker run --rm --network agent-platform_default postgres:16 \
 | **Errors** | The `status` label (`ok`/`error`) on all three counters above | `sum(rate(agent_tool_calls_total{status="error"}[5m])) / sum(rate(agent_tool_calls_total[5m]))` |
 | **Duration** | `agent_task_duration_seconds`, `agent_llm_call_duration_seconds`, `agent_tool_call_duration_seconds` (all histograms — p50/p95/avg all derivable) | `histogram_quantile(0.95, sum(rate(agent_task_duration_seconds_bucket[5m])) by (le))` |
 
-Two of the seven [alert rules](#alerts) (`task-failure-rate-high`, `llm-call-error-rate`) are directly Rate+Errors checks; `llm-call-latency-high` is a Duration check.
+Two of the nine [alert rules](#alerts) (`task-failure-rate-high`, `llm-call-error-rate`) are directly Rate+Errors checks; `llm-call-latency-high` is a Duration check.
 
 **USE — Utilization, Saturation, Errors — is partially covered, Postgres-only.** `postgres_exporter` (see [Postgres Overview](#postgres-overview) above) gives real USE-shaped signal for the database specifically — connections-vs-max (saturation), cache hit ratio and temp-file spill (utilization/pressure on `work_mem` and shared buffers), deadlocks (a real error signal, not just up/down). Everything *else* still has a real, deliberate gap:
 
@@ -304,7 +311,7 @@ Every container's stdout is captured — `alloy` discovers all of them via the D
 ```logql
 sum(rate({service="agent"} |= "tool_error" [5m]))                       # tool_error lines/sec
 sum(count_over_time({service="agent"} | json | level="ERROR" [1h]))     # error count, last hour
-sum by (service) (rate({job="docker"}[5m]))                             # log volume per service
+sum by (service) (rate({service=~".+"}[5m]))                            # log volume per service
 ```
 
 **Combine multiple conditions:**

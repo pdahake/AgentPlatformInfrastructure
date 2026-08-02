@@ -28,11 +28,13 @@ Steps:
        - Only the first NEWS_ROWS_LIMIT rows of the CSV are loaded into
          Postgres at all (default: all ~1.24M — the full-text search tool
          covers the whole corpus regardless of embedding limit below).
-       - Of those, only NEWS_EMBED_LIMIT (default 20,000) get embedded via
-         the LiteLLM embeddings endpoint (OpenAI text-embedding-3-small) —
-         embedding the full 1.24M headlines is a real, costly, rate-limited
-         batch job that does not belong in the default `docker compose up`
-         path. If you want the full corpus embedded, run ingestion once,
+       - Of those, only NEWS_EMBED_LIMIT (default 10,000, kept low enough that
+         the committed data/export/news_headlines.copy.gz stays under
+         GitHub's 100MB per-file limit) get embedded via the LiteLLM
+         embeddings endpoint (OpenAI text-embedding-3-small) — embedding the
+         full 1.24M headlines is a real, costly, rate-limited batch job that
+         does not belong in the default `docker compose up` path. If you
+         want the full corpus embedded, run ingestion once,
          standalone, with a raised limit *before* `docker compose up`:
              NEWS_EMBED_LIMIT=1244184 DATA_SOURCE=raw \
                  docker compose run --rm ingest
@@ -79,7 +81,7 @@ POSTGRES_EXPORTER_PASSWORD = os.environ["POSTGRES_EXPORTER_PASSWORD"]
 LITELLM_BASE_URL = os.environ.get("LITELLM_BASE_URL", "http://litellm:4000")
 LITELLM_MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-local-master")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
-NEWS_EMBED_LIMIT = int(os.environ.get("NEWS_EMBED_LIMIT", "20000"))
+NEWS_EMBED_LIMIT = int(os.environ.get("NEWS_EMBED_LIMIT", "10000"))
 EMBED_BATCH_SIZE = int(os.environ.get("EMBED_BATCH_SIZE", "100"))
 # 0 (default) means "no cap, load all ~1.24M rows". Only trims how many rows
 # land in Postgres from raw CSV; unrelated to NEWS_EMBED_LIMIT above.

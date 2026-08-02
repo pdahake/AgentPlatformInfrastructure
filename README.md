@@ -32,56 +32,79 @@ Here's what that afternoon actually looks like from the operator's side.
 
 **It starts at the dashboard.** One glance answers the questions that matter first: is
 throughput normal, is anything failing, is spend where it should be. The task-runs and
-tool-calls panels show the shape of that afternoon's traffic; the bottom row answers "how
-much did this cost" in one number — `$0.0100` and 2,771 tokens here — no PromQL required.
+tool-calls panels show the shape of that afternoon's traffic; the bottom rows answer "how
+much did this cost" and "is anything failing" in a handful of numbers — `$0.8535` and
+218,001 tokens spent so far, a 9.38% task failure rate — no PromQL required.
 
-![Dashboard](dashboard.jpg)
+![Dashboard](agent_platform_overview.jpg)
 
 **Something's flagged before anyone has to go looking for it.** This is the same
-Prometheus data the dashboard reads, evaluated continuously against 7 rules instead of
-watched by a human. `"A service is down"` is firing — note the raw
-`{{ $labels.instance }}` sitting unrendered in the summary column, which is genuinely how
-Grafana shows a rule's *template* in the list view; open the firing instance itself and it
-resolves to the actual service name. The other six rules — semantic-search failures,
-per-task token/cost blowouts, task failure rate, LLM errors, LLM latency — are `Normal`
-right now, which is itself useful information: nothing else needs attention.
+Prometheus data the dashboard reads, evaluated continuously against 9 rules instead of
+watched by a human. Three are `Firing` here — `Semantic search failing`, `Task token usage
+exceeds threshold`, and `Task cost exceeds threshold` — a direct, honest consequence of
+deliberately mixed-in error/edge-case traffic (missing tickers, invalid models, oversized
+compound tasks) rather than a staged screenshot. The other six — service-down, task
+failure rate, LLM call errors, LLM call latency, and the two Postgres rules (connections
+near max, deadlocks) — are `Normal`, which is itself useful information: nothing else
+needs attention right now.
 
-![Alert rules](alerting_rules.jpg)
+![Alert rules](grfana_alerts.jpg)
 
-**The dashboard's 9 panels are a curated view — everything Prometheus actually has is
-bigger than that.** Every `agent_*` metric this platform emits — LLM call counts and
-durations, per-model token/cost counters, the per-task histograms that make the alert
-thresholds possible — shows up here automatically, browsable without writing a query, the
-moment `docker compose up` starts scraping it.
+**The overview dashboard's 14 panels are a curated view — everything Prometheus actually
+has is bigger than that.** Every `agent_*` metric this platform emits — LLM call counts
+and durations, per-model token/cost counters, the per-task histograms that make the alert
+thresholds possible, and now per-tool/per-type error rates too — shows up automatically
+the moment `docker compose up` starts scraping it. The raw Prometheus auto-discovery view
+mixes all of that in with ~10 `python_*`/`process_*` runtime metrics `prometheus_client`
+registers for free, and expands further per label/bucket combination — which is exactly
+why there's also a dedicated **"Agent Custom Metrics (raw)"** dashboard, shown below, with
+exactly one panel per custom metric and nothing else, for when you want the signal without
+the noise.
 
-![Metrics](metrics.jpg)
+![Metrics](agent_custom_metrics.jpg)
 
-That auto-discovery view mixes our metrics in with ~10 `python_*`/`process_*` runtime
-metrics `prometheus_client` registers for free, and expands further per label/bucket
-combination (50+ entries there, not 10) — there's also a dedicated **"Agent Custom
-Metrics (raw)"** dashboard with exactly one panel per custom metric, nothing else, for
-when you want the signal without the noise. Both dashboards live in Grafana's
-**"Agent Platform"** folder, alongside the 7 alert rules.
+Both dashboards live in Grafana's
+**"Agent Platform"** folder, alongside the 9 alert rules.
 
 **Metrics tell you something's off; logs tell you what.** Every one of the 11 services in
 this stack ships its logs here with zero per-service configuration — Alloy discovers
 containers via the Docker API, so a new service in `docker-compose.yaml` just starts
-flowing the moment it exists. `agent`, `loki`, `grafana`, `litellm`, `alloy` are visible
-here mid-scroll; the same view covers `postgres`, `jaeger`, `prometheus`, and the rest.
+flowing the moment it exists. This is Grafana's Logs Drilldown view filtered to
+`service_name=agent` — 593 log lines and a volume histogram (color-coded by level) over
+the last 15 minutes, JSON-structured entries readable straight off the raw line without a
+query; the same view covers `postgres`, `litellm`, `jaeger`, and the rest with a one-label
+change.
 
-![Logs](logs.jpg)
+![Logs](loki_logs.jpg)
 
 **And when one specific run needs a closer look, logs and traces aren't two separate
-investigations.** This is the log line for one task's completion (`task completed ...
-trace_id=d444eb09...`) split-paned against that exact trace in Jaeger, click-through in
-both directions. The span on the right — `agent.llm_call`, 2.6s — shows precisely what
-that call cost and did: the resolved model actually billed
-(`anthropic/claude-sonnet-4-5-20250929`, not the `AGENT_MODEL` routing alias), completion
-tokens, USD cost pulled straight from litellm's response headers, and the full outgoing
-prompt text. This is the same trail every alert's `logs_link` walks you down automatically
-— metric flags it, log names the task, trace shows exactly what happened.
+investigations.** This is Jaeger's trace search for `service=agent` (left) split-paned
+against Loki filtered to that exact `trace_id` (right) — every LiteLLM completion call
+this task made shows up correlated to the same ID, click-through in both directions. This
+is the same trail every alert's `logs_link` walks you down automatically — metric flags
+it, log names the task and its `trace_id`, Jaeger shows the full span tree for it
+(`invoke_agent`, `execute_event_loop_cycle`, `chat`, `execute_tool` — Strands' own
+automatic instrumentation) including per-call token usage. Per-call cost isn't in Strands'
+spans (it has no pricing knowledge) — that's added back as a span event on the root span,
+computed via `litellm.cost_per_token()` against the resolved model
+(`anthropic/claude-sonnet-4-5-20250929`, not the `AGENT_MODEL` routing alias). Prompt/
+response text is deliberately *not* captured in either the logs or the trace — a real,
+live decision about how much request/response content to let a tracing backend retain,
+not something to inherit by accident.
 
-![Logs and traces linking](logs%20and%20traces%20linking.jpg)
+![Logs and traces linking](logs4trace.jpg)
+
+**That span tree, opened up.** `agent: POST /run` (3.1s total) contains `agent.run_task`,
+which contains Strands' own `invoke_agent Strands Agents` span — its attributes list
+`gen_ai.agent.tools` (all four tools this agent can call), the resolved
+`gen_ai.request.model` (`litellm_proxy/claude-agent`), and per-call token counts, all
+emitted automatically, no manual instrumentation. Nested underneath, one
+`execute_event_loop_cycle` per LLM<->tool round trip, each containing its own `chat` span
+and an `execute_tool get_fundamentals`/etc. span for every tool call the model made that
+turn — the exact shape of `MAX_ITERATIONS`/`Limits(turns=...)` described in
+[DECISIONS.md](DECISIONS.md), made visible.
+
+![Trace detail](traces.jpg)
 
 Panel-by-panel reference, alert semantics, and LogQL query examples are all in
 [RUNBOOK.md](RUNBOOK.md#dashboard-panels).

@@ -90,6 +90,70 @@
       "targets": [
         { "expr": "sum(rate(agent_llm_cost_usd_total[5m])) by (model)", "legendFormat": "{{model}}" }
       ]
+    },
+    {
+      "id": 10,
+      "title": "Task failure rate (min. 30m window)",
+      "description": "Pinned to a 30-minute window (timeFrom) regardless of the dashboard's selected time range — a shorter window on a low-traffic system only contains a handful of tasks, and one failure among 2-3 tasks swings this to 33%/50%/etc without reflecting any real underlying rate. This deliberately trades responsiveness to the time picker for a large-enough sample to be meaningful; contrast with 'Task failures (selected range)' below, which is a raw count and has no such problem.",
+      "type": "stat",
+      "timeFrom": "30m",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 32 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "max": 100,
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        { "expr": "100 * sum(increase(agent_tasks_total{status=\"failed\"}[$__range])) / sum(increase(agent_tasks_total[$__range]))" }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "Task failures (selected range)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 32 },
+      "targets": [
+        { "expr": "sum(increase(agent_tasks_total{status=\"failed\"}[$__range]))" }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Errors by type (task/LLM/tool)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        { "expr": "sum(rate(agent_tasks_total{status=\"failed\"}[5m]))", "legendFormat": "task failures" },
+        { "expr": "sum(rate(agent_llm_calls_total{status=\"error\"}[5m]))", "legendFormat": "llm errors" },
+        { "expr": "sum(rate(agent_tool_calls_total{status=\"tool_error\"}[5m]))", "legendFormat": "tool errors" }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Tool error rate by tool",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        { "expr": "sum(rate(agent_tool_calls_total{status=\"tool_error\"}[5m])) by (tool)", "legendFormat": "{{tool}}" }
+      ]
+    },
+    {
+      "id": 14,
+      "title": "LLM call error rate by model",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "targets": [
+        { "expr": "sum(rate(agent_llm_calls_total{status=\"error\"}[5m])) by (model)", "legendFormat": "{{model}}" }
+      ]
     }
   ],
   "time": { "from": "now-1h", "to": "now" }
