@@ -193,6 +193,30 @@ A second dashboard (`observability/grafana/dashboards/json/agent-custom-metrics.
 
 Histogram panels here show a rolling **average** (`sum(rate(x_sum[5m])) / sum(rate(x_count[5m]))`) rather than percentiles — the curated dashboard above already has p50/p95 for task duration and tokens; this one prioritizes "one simple number per metric" over duplicating that.
 
+### Postgres Overview
+
+A third dashboard (`observability/grafana/dashboards/json/postgres-overview.json`, uid `postgres-overview`) — DB-level metrics, sourced from `postgres_exporter` (a new service; Postgres has no native `/metrics` endpoint of its own). Scraped by Prometheus's `postgres` job (`postgres-exporter:9187`), same 10s interval as everything else.
+
+| # | Panel | Query | What it tells you |
+|---|---|---|---|
+| 1 | Postgres up | `pg_up` | 1/0 — is the exporter able to reach Postgres at all. |
+| 2 | Database size | `pg_database_size_bytes{datname="agent_platform"}` | On-disk size of the `agent_platform` database (data + indexes). |
+| 3 | Active connections vs max_connections | `sum(pg_stat_database_numbackends{datname="agent_platform"})` vs `pg_settings_max_connections` | How close to Postgres's connection ceiling (default 100) actual usage is — the agent's pool (`psycopg_pool`, max 10) plus `ingest`'s and `postgres_exporter`'s own connections all count here. |
+| 4 | Cache hit ratio | `blks_hit / (blks_hit + blks_read)` | Fraction of reads served from Postgres's shared buffer cache vs disk — healthy is generally >99% once the cache is warm; a sustained drop means either a cache too small for the working set or a new query pattern scanning cold data. |
+| 5 | Transactions/sec (commit vs rollback) | `rate(pg_stat_database_xact_commit\|xact_rollback[5m])` | Write/query throughput and how much of it is failing/aborting — a rollback rate that tracks commits is worth investigating. |
+| 6 | Tuple operations/sec | `rate(pg_stat_database_tup_fetched\|inserted\|updated\|deleted[5m])` | Row-level read/write activity — `fetched` should dominate given the agent's read-only workload; `inserted`/`updated`/`deleted` should mostly track `ingest` runs, not steady-state agent traffic. |
+| 7 | Locks by mode | `sum(pg_locks_count{datname="agent_platform"}) by (mode)` | Lock contention — this workload is read-heavy (`agent_ro` is SELECT-only) so sustained non-trivial counts in exclusive-lock modes would be unexpected and worth a closer look. |
+| 8 | Temp file spill (bytes/sec) | `rate(pg_stat_database_temp_bytes[5m])` | Postgres spills to disk-backed temp files when a sort/hash operation exceeds `work_mem` — non-zero here means a query (most likely `search_news_fulltext`'s GIN scan or `search_news_semantic`'s ivfflat scan over a large result set) is memory-constrained. |
+| 9 | Deadlocks | `rate(pg_stat_database_deadlocks[5m])` | Should be flat zero given the access patterns here (one writer role, one read-only role, no complex multi-table transactions) — any nonzero rate is a real bug to chase. |
+
+**Least privilege, same pattern as `agent_ro`**: `postgres_exporter` is a dedicated Postgres role (`sql/schema.sql`, password `POSTGRES_EXPORTER_PASSWORD`) granted the built-in `pg_monitor` role — not `SELECT` on any table. It can see connection counts, cache stats, and lock counts, but querying `fundamentals`/`prices`/`news_headlines` directly returns `permission denied`, verified directly:
+```bash
+docker run --rm --network agent-platform_default postgres:16 \
+  psql "postgresql://postgres_exporter:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/agent_platform" \
+  -c "SELECT count(*) FROM fundamentals;"
+# ERROR:  permission denied for table fundamentals
+```
+
 ### RED (agent) / USE (infrastructure) metrics coverage
 
 **RED — Rate, Errors, Duration — is fully covered for the agent**, at finer granularity than the textbook version (broken down per tool and per resolved model, not just in aggregate):
@@ -205,13 +229,13 @@ Histogram panels here show a rolling **average** (`sum(rate(x_sum[5m])) / sum(ra
 
 Two of the seven [alert rules](#alerts) (`task-failure-rate-high`, `llm-call-error-rate`) are directly Rate+Errors checks; `llm-call-latency-high` is a Duration check.
 
-**USE — Utilization, Saturation, Errors — is *not* covered for the underlying infrastructure.** This is a real, deliberate gap, not an oversight to paper over:
+**USE — Utilization, Saturation, Errors — is partially covered, Postgres-only.** `postgres_exporter` (see [Postgres Overview](#postgres-overview) above) gives real USE-shaped signal for the database specifically — connections-vs-max (saturation), cache hit ratio and temp-file spill (utilization/pressure on `work_mem` and shared buffers), deadlocks (a real error signal, not just up/down). Everything *else* still has a real, deliberate gap:
 
-- **Utilization** (CPU, memory, disk, network per container/host): nothing. There's no `cAdvisor` (container-level) or `node_exporter` (host-level) anywhere in `docker-compose.yaml`/`observability/prometheus.yml`. The `python_*`/`process_*` metrics `prometheus_client` adds for free only cover the `agent` process's own memory/GC/file-descriptor stats — not Postgres, litellm, or the host.
-- **Saturation** (queue depth, connection pool exhaustion): nothing exposed. The agent's Postgres connection pool (`psycopg_pool`, max 10 connections) has no corresponding metric — pool exhaustion would only be visible indirectly, as rising tool-call latency/errors, not as a direct signal.
-- **Errors** (infra-level: disk I/O errors, Postgres query errors, OOM kills): only a coarse substitute — `blackbox_exporter`'s `probe_success` (see [Alerts](#alerts)) gives binary up/down per service, which is "is it reachable," not a real error-rate signal for what's happening *inside* Postgres/litellm/etc.
+- **Container/host-level utilization** (CPU, memory, disk, network per container or for the host itself): nothing. There's no `cAdvisor` (container-level) or `node_exporter` (host-level) anywhere in `docker-compose.yaml`/`observability/prometheus.yml`. The `python_*`/`process_*` metrics `prometheus_client` adds for free only cover the `agent` process's own memory/GC/file-descriptor stats — not litellm, not any container's actual CPU/memory usage, not the host.
+- **Agent-side saturation** (connection pool exhaustion): still nothing exposed on the agent's side of the pool. The agent's Postgres connection pool (`psycopg_pool`, max 10 connections) has no corresponding metric of its own — Postgres's own `pg_stat_database_numbackends` (panel 3 above) is a proxy for this from the DB side, but pool exhaustion on the agent's side specifically would still only be visible indirectly, as rising tool-call latency/errors.
+- **litellm/other-service errors** (beyond up/down): still only the coarse substitute — `blackbox_exporter`'s `probe_success` (see [Alerts](#alerts)) gives binary up/down per service, not a real error-rate signal for what's happening *inside* litellm, Jaeger, Loki, etc.
 
-Adding `cAdvisor` + `node_exporter` (both scraped by the existing Prometheus, no new stack needed) would close this gap and is the natural next addition if operating this for real — see [DECISIONS.md](DECISIONS.md) for how this fits the project's broader "what's included vs. what's a documented future extension" framing.
+Adding `cAdvisor` + `node_exporter` (both scraped by the existing Prometheus, no new stack needed) would close the remaining container/host gap and is the natural next addition if operating this for real — see [DECISIONS.md](DECISIONS.md) for how this fits the project's broader "what's included vs. what's a documented future extension" framing.
 
 ## Viewing logs
 
@@ -311,6 +335,10 @@ Grafana → left sidebar → **Alerting → Alert rules** (folder: "Agent Platfo
 | Task failure rate high | >20% of tasks failed in the last 10m | Catches systemic issues (e.g. `MAX_ITERATIONS` becoming common) that the semantic-search alert wouldn't |
 | LLM call errors | Any `agent_llm_calls_total{status="error"}` in the last 5m | Distinct from tool errors — this is the litellm/provider path specifically |
 | LLM call latency high (p95) | p95 LLM call duration >15s over 10m | Leading indicator of provider degradation, before it starts causing timeouts/failures |
+| Postgres connections near max_connections | Total connections >80% of `max_connections` over 2m | DB-level saturation, sourced from `postgres_exporter` — a saturated pool still passes the blackbox TCP probe (the service *is* up), it just starts rejecting new connections, which otherwise surfaces only indirectly as unexplained tool-call errors |
+| Postgres deadlocks detected | Any deadlock in the last 5m | Should be flat zero given this platform's access patterns (one write role used only by `ingest`, one read-only agent role, no complex multi-table transactions) — any nonzero rate is a real bug, not noise |
+
+The two Postgres alerts don't have a `logs_link` — there's no corresponding structured log line in `agent_loop.py` for either (they're DB-internal conditions, not agent-observed ones). Instead they carry a `troubleshooting` annotation with the direct command to run (`pg_stat_activity` grouped by role for the connections alert; `docker compose logs postgres | grep -i deadlock` for the deadlock alert, since Postgres itself logs full deadlock details — the two conflicting locks/queries — at the moment it happens).
 
 **Why token/cost thresholds are histograms, not just counters**: a `Counter` can tell you total spend, but can't answer "did any *single* task exceed $X" — only a distribution (`Histogram`) can. Both alerts work by subtracting the `+Inf` bucket's count from the threshold bucket's count (`sum(increase(..._bucket{le="+Inf"}[10m])) - sum(increase(..._bucket{le="<threshold>"}[10m]))`), which gives "how many observations landed strictly above the threshold." **This only works if the threshold is an exact existing bucket boundary** (see the `buckets=(...)` tuples in `agent/observability.py`) — if you change a threshold, add a matching bucket boundary too, or the subtraction silently returns nothing useful.
 

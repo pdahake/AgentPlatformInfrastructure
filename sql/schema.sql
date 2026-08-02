@@ -22,6 +22,22 @@ END
 $$;
 ALTER ROLE agent_ro PASSWORD '__POSTGRES_AGENT_RO_PASSWORD__';
 
+-- Same pattern as agent_ro above, for postgres_exporter (the Prometheus DB
+-- metrics scraper). Granted the built-in `pg_monitor` role rather than table
+-- SELECTs — pg_monitor is Postgres's own least-privilege bundle for exactly
+-- this purpose (pg_stat_*/pg_settings visibility, no access to actual table
+-- data), so the exporter can see connection counts/cache hit ratio/tuple
+-- stats without ever being able to read fundamentals/prices/news_headlines.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'postgres_exporter') THEN
+        CREATE ROLE postgres_exporter LOGIN;
+    END IF;
+END
+$$;
+ALTER ROLE postgres_exporter PASSWORD '__POSTGRES_EXPORTER_PASSWORD__';
+GRANT pg_monitor TO postgres_exporter;
+
 CREATE TABLE IF NOT EXISTS fundamentals (
     id                          SERIAL PRIMARY KEY,
     ticker                      TEXT NOT NULL,

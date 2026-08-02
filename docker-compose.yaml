@@ -18,6 +18,22 @@ services:
       - "5432:5432"
     restart: unless-stopped
 
+  # Postgres has no native Prometheus /metrics endpoint of its own — this is
+  # the standard community exporter, translating pg_stat_*/pg_settings into
+  # scrapeable metrics. Waits on `ingest` (not just `postgres`) because the
+  # postgres_exporter role it connects as is created by sql/schema.sql, which
+  # ingest applies — starting before that would just loop on auth failures.
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      DATA_SOURCE_NAME: postgresql://postgres_exporter:${POSTGRES_EXPORTER_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    depends_on:
+      ingest:
+        condition: service_completed_successfully
+    ports:
+      - "9187:9187"
+    restart: unless-stopped
+
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
     environment:
@@ -47,6 +63,7 @@ services:
     environment:
       POSTGRES_DSN: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       POSTGRES_AGENT_RO_PASSWORD: ${POSTGRES_AGENT_RO_PASSWORD}
+      POSTGRES_EXPORTER_PASSWORD: ${POSTGRES_EXPORTER_PASSWORD}
       DATA_DIR: /data/raw
       SCHEMA_FILE: /sql/schema.sql
       LITELLM_BASE_URL: http://litellm:4000

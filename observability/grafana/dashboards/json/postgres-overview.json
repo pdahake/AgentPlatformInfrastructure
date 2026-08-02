@@ -1,0 +1,104 @@
+{
+  "title": "Postgres Overview",
+  "uid": "postgres-overview",
+  "description": "DB-level metrics from postgres_exporter (pg_stat_database/pg_stat_activity/pg_locks/pg_settings) — connections, cache hit ratio, transaction/tuple throughput, locks, temp-file spill, size. Scoped to the agent_platform database where every query below has one.",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Postgres up",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "pg_up", "legendFormat": "up" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Database size",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        { "expr": "pg_database_size_bytes{datname=\"agent_platform\"}", "legendFormat": "agent_platform" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Active connections vs max_connections",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        { "expr": "sum(pg_stat_database_numbackends{datname=\"agent_platform\"})", "legendFormat": "connections (agent_platform)" },
+        { "expr": "pg_settings_max_connections", "legendFormat": "max_connections" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Cache hit ratio",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "max": 1, "min": 0 } },
+      "targets": [
+        {
+          "expr": "sum(rate(pg_stat_database_blks_hit{datname=\"agent_platform\"}[5m])) / (sum(rate(pg_stat_database_blks_hit{datname=\"agent_platform\"}[5m])) + sum(rate(pg_stat_database_blks_read{datname=\"agent_platform\"}[5m])))",
+          "legendFormat": "cache hit ratio"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Transactions/sec (commit vs rollback)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        { "expr": "sum(rate(pg_stat_database_xact_commit{datname=\"agent_platform\"}[5m]))", "legendFormat": "commit" },
+        { "expr": "sum(rate(pg_stat_database_xact_rollback{datname=\"agent_platform\"}[5m]))", "legendFormat": "rollback" }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Tuple operations/sec",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "sum(rate(pg_stat_database_tup_fetched{datname=\"agent_platform\"}[5m]))", "legendFormat": "fetched" },
+        { "expr": "sum(rate(pg_stat_database_tup_inserted{datname=\"agent_platform\"}[5m]))", "legendFormat": "inserted" },
+        { "expr": "sum(rate(pg_stat_database_tup_updated{datname=\"agent_platform\"}[5m]))", "legendFormat": "updated" },
+        { "expr": "sum(rate(pg_stat_database_tup_deleted{datname=\"agent_platform\"}[5m]))", "legendFormat": "deleted" }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Locks by mode",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        { "expr": "sum(pg_locks_count{datname=\"agent_platform\"}) by (mode)", "legendFormat": "{{mode}}" }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Temp file spill (bytes/sec)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "Bps" } },
+      "targets": [
+        { "expr": "sum(rate(pg_stat_database_temp_bytes{datname=\"agent_platform\"}[5m]))", "legendFormat": "temp bytes/sec" }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Deadlocks",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        { "expr": "sum(rate(pg_stat_database_deadlocks{datname=\"agent_platform\"}[5m]))", "legendFormat": "deadlocks/sec" }
+      ]
+    }
+  ],
+  "time": { "from": "now-1h", "to": "now" }
+}

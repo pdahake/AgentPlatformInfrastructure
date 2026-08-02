@@ -6,6 +6,10 @@ scrape_configs:
     static_configs:
       - targets: ["agent:8000"]
 
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
   # Uniform "is it up" probing across every service via blackbox_exporter —
   # covers services with no native Prometheus /metrics endpoint of their own
   # (postgres, jaeger, grafana, otel-collector, alloy), not just the agent.
