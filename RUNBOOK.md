@@ -4,19 +4,34 @@ Operational reference for running, verifying, and troubleshooting the agent plat
 For *why* things are built this way, see [DECISIONS.md](DECISIONS.md).
 
 ## Contents
-- [Architecture at a glance](#architecture-at-a-glance)
-- [Prerequisites](#prerequisites)
-- [First-time setup](#first-time-setup)
-- [Starting the stack](#starting-the-stack)
-- [Verifying everything is healthy](#verifying-everything-is-healthy)
-- [Running a task](#running-a-task)
-- [Accessing the UIs](#accessing-the-uis)
-- [Dashboard panels](#dashboard-panels)
-- [Viewing logs](#viewing-logs)
-- [Alerts](#alerts)
-- [Common operations](#common-operations)
-- [Troubleshooting](#troubleshooting)
-- [Shutting down / resetting](#shutting-down--resetting)
+- [Runbook](#runbook)
+  - [Contents](#contents)
+  - [Architecture at a glance](#architecture-at-a-glance)
+  - [Prerequisites](#prerequisites)
+  - [First-time setup](#first-time-setup)
+  - [Starting the stack](#starting-the-stack)
+    - [`docker compose up` flags used in this runbook](#docker-compose-up-flags-used-in-this-runbook)
+  - [Verifying everything is healthy](#verifying-everything-is-healthy)
+  - [Running a task](#running-a-task)
+    - [Sample tasks to try](#sample-tasks-to-try)
+  - [Accessing the UIs](#accessing-the-uis)
+  - [Dashboard panels](#dashboard-panels)
+    - [Agent Custom Metrics (raw)](#agent-custom-metrics-raw)
+    - [Postgres Overview](#postgres-overview)
+    - [RED (agent) / USE (infrastructure) metrics coverage](#red-agent--use-infrastructure-metrics-coverage)
+  - [Viewing logs](#viewing-logs)
+  - [Alerts](#alerts)
+  - [Common operations](#common-operations)
+    - [Change the agent's DB password](#change-the-agents-db-password)
+    - [Re-run ingest without restarting the whole stack](#re-run-ingest-without-restarting-the-whole-stack)
+    - [Force a fresh raw parse (ignore any existing export)](#force-a-fresh-raw-parse-ignore-any-existing-export)
+    - [Embed the full 1.24M headline corpus (not done by default)](#embed-the-full-124m-headline-corpus-not-done-by-default)
+    - [Quick small-scale dev iteration (don't touch the real export)](#quick-small-scale-dev-iteration-dont-touch-the-real-export)
+    - [Switch models](#switch-models)
+    - [View logs](#view-logs)
+    - [Check current data volumes](#check-current-data-volumes)
+  - [Troubleshooting](#troubleshooting)
+  - [Shutting down / resetting](#shutting-down--resetting)
 
 ## Architecture at a glance
 
@@ -184,8 +199,6 @@ The "Agent Platform Overview" dashboard (Grafana → Dashboards, or http://local
 | 7 | Total tokens used | `sum(agent_llm_tokens_total)` | Running total. **Cumulative since the `agent` container last started** — resets on restart/rebuild (in-memory counter), even though Prometheus's own history (panels 1-6, 9) survives that. |
 | 8 | Total cost (USD) | `sum(agent_llm_cost_usd_total)` | Same idea in real dollars — litellm's actual billed cost per call, not a token-count estimate. Same restart caveat as #7. |
 | 9 | Cost by model ($/5m) | `sum(rate(agent_llm_cost_usd_total[5m])) by (model)` | Spend rate over time, per resolved model — useful once routing across multiple models/providers. |
-
-**If you see two series for what should be one model** (e.g. an old alias like `claude-agent` alongside the real `anthropic/...` name): that's stale history from before a labeling change, not a second model actually running — Prometheus starts a new time series whenever a label *value* changes, it doesn't rewrite old samples. The stale series has no new data coming in and will age out of any rolling time window on its own; no action needed unless you want to wipe Prometheus's `promdata` volume for a clean slate (which also discards everything else's history).
 
 ### Agent Custom Metrics (raw)
 
